@@ -1,0 +1,334 @@
+---
+title: ''
+author: "Сафронова Анна, azsafronova"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r echo = F, message = F, warning = F}
+library(ggplot2)
+library(dplyr)
+library(tidymodels)
+library(themis)
+library(vip)
+
+
+#Подключение к базе данных
+library(DBI)
+library(RMariaDB)
+con = dbConnect(RMariaDB::MariaDB(), 
+                 user='studentminor', 
+                 password='DataMinorHSE!2020', 
+                 dbname='employee', 
+                 host='34.88.193.134',
+                 port = 3306)
+
+
+#Содержит три таблицы
+
+#* **profile** - общая информация о сотруднике
+#   * EmployeeNumber: id сотрудника
+#   * Age: возраст сотрудника
+#   * Education: уровень образования         
+#   * EduFieldId: сфера образования (id, расшифровку см. в таблице education)
+#   * Gender: пол
+#   * MaritalStatus: семейный статус     
+#   * NumCompaniesWorked: в скольких компаниях работал сотрудник
+#   * TotalWorkingYears: общий стаж работы (в течение жизни)
+#   * WorkLifeBalance: самооценка баланса работы и жизни (Bad-Good-Better-Best)  
+#   * DistanceFromHome: расстояние от дома до работы в милях
+   
+#* **portfolio** - информация о работе сотрудника
+#   * EmployeeNumber: id сотрудника
+#   * Attrition: остался сотрудник или нет (1- ушел, 0 - остался)
+#   * BusinessTravel: частота командировок
+#   * Department: в каком отделе работает сотрудник
+#   * EnvironmentSatisfaction: удовлетворенность окружением (Low-Medium-High-Very High)
+#   * JobInvolvement: вовлеченность в работу (Low-Medium-High-Very High)
+#   * JobRole: должность
+#   * JobSatisfaction: удовлетворенность рабочими задачами (Low-Medium-High-Very High)
+#   * MonthlyIncome: размер зарплаты
+#   *OverTime: есть ли переработка
+#   * PercentSalaryHike: на какой процент повышается зарплата
+#   * PerformanceRating: оценка результативности (Low-Good-Excellent-Outstanding)
+#   * RelationshipSatisfaction: удовлетворенность отношениями на работе (Low-Medium-High-Very High)
+#   * TrainingTimesLastYear: участие в программах повышение квалификации (число программ за последний год)
+#   * YearsAtCompany: стаж работы в компании
+#   * YearsInCurrentRole: стаж работы в текущей должности
+#   * YearsSinceLastPromotion: сколько лет прошло с последнего повышения
+#   * YearsWithCurrManager: сколько лет работает с текущим руководителем
+   
+#* **education** -- служебная таблица с расшифровкой сфер обучения
+#   * EduFieldId: id сферы образования
+#   * EducationField: сфера образования
+```
+
+#### Сафронова Анна, azsafronova
+
+## Анализ причин ухода сотрудников
+
+Логичнее всего мне показалось выделить подгруппу наиболее результативных работников (PerformanceRating - "Outstanding","Excellent") - поскольку именно их увольнение по идее должно приносить бизнесу максимальные убытки, так что изменение влияющих на их увольнение факторов помогло бы сэкономить предприятию средства.
+
+```{r}
+all = dbGetQuery(con, "SELECT EmployeeNumber, Department, EnvironmentSatisfaction, 
+                       JobRole, MonthlyIncome, YearsSinceLastPromotion, Attrition, Age, Gender, DistanceFromHome, Education, YearsAtCompany, JobInvolvement
+                       
+                       FROM portfolio INNER JOIN profile USING(EmployeeNumber)")
+
+d = data.frame ('Выборка'  = c("вся выборка", "продуктивные работники"), 'Число_наблюдений' = c(as.numeric(nrow(all)), as.numeric(nrow(dbGetQuery(con, "SELECT EmployeeNumber, Department, EnvironmentSatisfaction, 
+                                 JobRole, MonthlyIncome, YearsSinceLastPromotion, Attrition, Age,                                                    Gender, DistanceFromHome, Education, YearsAtCompany, JobInvolvement
+                       
+                                 FROM portfolio INNER JOIN profile USING(EmployeeNumber)
+                 
+                                 WHERE PerformanceRating = 'Outstanding' | 'Excellent'")))))
+
+knitr::kable(d)
+```
+
+Оказалось, что в наших данных отсутствуют "Low" и "Good" оценки результативности. В связи с этим было принято решение заменить анализ работников по показателю продуктивности анализом по показателю зарплаты. Эти переменные по сути отражают одно и то же, поскольку в большинстве случаев как раз наиболее производительные сотрудники получают максимальную зарплату. Таким образом, в исследовании был выделен сегмент работников с показателями зарплаты (переменная MonthlyIncome) выше медианного значения (4903,5).
+
+Посмотрим на распределение данных в генеральной совокупности и в выделенном сегменте.
+
+```{r}
+high = all %>% filter((dbGetQuery(con, "SELECT EmployeeNumber, MonthlyIncome FROM portfolio"))$MonthlyIncome >= median((dbGetQuery(con, "SELECT EmployeeNumber, MonthlyIncome FROM portfolio"))$MonthlyIncome))
+
+
+#график без легенды зато сос мыслом..
+
+#ggplot(data = high) + 
+#      geom_bar(data = all, aes(x = as.factor(Attrition)), fill = "#DDA288") +
+#      geom_bar(aes(x = as.factor(Attrition)), fill = "#5A4E4D") +
+#    theme_minimal() + xlab('Attrition') + ylab('') + scale_x_discrete(labels = c('не увольняются', #'увольняются'))
+
+
+all_n = all %>% mutate(Wages = ifelse(MonthlyIncome >= median(MonthlyIncome), 'high wages', 'all wages'))
+ggplot(data = all_n) +
+geom_bar(aes(x = as.factor(Attrition), fill = Wages)) +
+theme_minimal() + xlab('') + ylab('') + scale_fill_manual(values = c("#DDA288", "#5A4E4D")) +
+guides(fill = guide_legend(title = "Зарплата")) + 
+scale_x_discrete(labels = c('не увольняются', 'увольняются'))
+
+
+h = 100*(high %>% group_by(Attrition) %>% summarise(n = n()))[2,2]/
+       ((high %>% group_by(Attrition) %>% summarise(n = n()))[2,2] + 
+        (high %>% group_by(Attrition) %>% summarise(n = n()))[1,2])
+
+a = 100*(all %>% group_by(Attrition) %>% summarise(n = n()))[2,2]/
+       ((all %>% group_by(Attrition) %>% summarise(n = n()))[2,2] + 
+        (all %>% group_by(Attrition) %>% summarise(n = n()))[1,2])
+
+dd = data.frame('Зарплата'  = c("all wages", "high wages"), 'Увольняются' = c(paste(round(a$n, digits = 2), '%'), paste(round(h$n, digits = 2), '%')))
+knitr::kable(dd)
+```
+
+Как можно увидеть, различие в выборке и общей совокупности данных по рассматриваемой переменной незначительное. Это дает возможность в случае необходимости экстраполировать полученные результаты на работников с любой зарплатой.
+
+Приступим к построению моделей. На рассмотрение было взято 4 типа моделей: Logistic Regression, Random Forest, Boosting и Decision Tree. Выбор модели будет основываться на характеристике accuracy для тестовой и обучающей выборки.
+
+```{r}
+### ПОСТРОЕНИЕ МОДЕЛЕЙ
+
+outstanding_model = high %>% na.omit()
+
+outstanding_model$Department = as.factor(outstanding_model$Department)
+outstanding_model$EnvironmentSatisfaction = as.factor(outstanding_model$EnvironmentSatisfaction)
+outstanding_model$JobRole = as.factor(outstanding_model$JobRole)
+outstanding_model$Attrition = as.factor(outstanding_model$Attrition)
+outstanding_model$JobInvolvement = as.factor(outstanding_model$JobInvolvement)
+outstanding_model$Education = as.factor(outstanding_model$Education)
+outstanding_model$Gender = as.factor(outstanding_model$Gender)
+
+set.seed(24601)
+split = initial_split(outstanding_model, prop = 0.8)
+train = training(split)
+test = testing(split)
+
+# Logistic Regression
+log = logistic_reg(mode = 'classification') %>% set_engine('glm')
+wf_log = workflow() %>% add_model(log) %>% add_formula(Attrition ~ .) %>% fit(train)
+predtest_log = predict(wf_log, test)
+accuracy_log = accuracy_vec(test$Attrition, predtest_log$.pred_class)
+
+predtrain_log = predict(wf_log, train)
+accuracy_log.tr = accuracy_vec(train$Attrition, predtrain_log$.pred_class)
+
+# ------------------------------------------------------------------------------
+
+# Tree
+tree = decision_tree(mode = 'classification') %>% set_engine('rpart')
+wf_tree = workflow() %>% add_model(tree) %>% add_formula(Attrition ~ .) %>% fit(train)
+predtest_tree = predict(wf_tree, test)
+accuracy_tree = accuracy_vec(test$Attrition, predtest_tree$.pred_class)
+
+predtrain_tree = predict(wf_tree, train)
+accuracy_tree.tr = accuracy_vec(train$Attrition, predtrain_tree$.pred_class)
+
+# ------------------------------------------------------------------------------
+
+# Random Forest
+rf = rand_forest(mode = 'classification', trees = 50) %>% set_engine('randomForest')
+wf_rf = workflow() %>% add_model(rf) %>% add_formula(Attrition ~ .) %>% fit(train)
+predtest_rf = predict(wf_rf, test)
+accuracy_rf = accuracy_vec(test$Attrition, predtest_rf$.pred_class)
+
+predtrain_rf = predict(wf_rf, train)
+accuracy_rf.tr = accuracy_vec(train$Attrition, predtrain_rf$.pred_class)
+
+#можно еще так
+#rf = rand_forest(mode = "classification") %>% set_engine("randomForest") %>% fit(Attrition ~ ., data = train)
+#predtest_rf = predict(rf$fit, test)
+#accuracy_rf = accuracy_vec(test$Attrition, predtest_rf)
+
+# ------------------------------------------------------------------------------
+
+# Boosting
+xgb = boost_tree(mode = "classification") %>% set_engine("xgboost") %>% fit(Attrition ~ ., data = train)
+predtest_xgb = predict(xgb, test)
+accuracy_xgb = accuracy_vec(test$Attrition, predtest_xgb$.pred_class)
+
+predtrain_xgb = predict(xgb, train)
+accuracy_xgb.tr = accuracy_vec(train$Attrition, predtrain_xgb$.pred_class)
+
+
+
+
+### ПРОВЕРКА ПОКАЗАТЕЛЕЙ МОДЕЛЕЙ, ВЫБОР МОДЕЛИ
+
+accuracy = c('Logistic Regression' = accuracy_log, 'Decision Tree' = accuracy_tree, 'Random Forest' = accuracy_rf, 'Boosting' = accuracy_xgb)
+accuracy.tr = c('Logistic Regression' = accuracy_log.tr, 'Decision Tree' = accuracy_tree.tr, 'Random Forest' = accuracy_rf.tr, 'Boosting' = accuracy_xgb.tr)
+
+ddd = data.frame('Accuracy_Test' = accuracy, 'Accuracy_Train' = accuracy.tr) %>% arrange(-accuracy)
+knitr::kable(ddd)
+```
+
+Все модели, кроме Logistic Regression и, возможно, Decision Tree оказались переобучены. Рассмотрим характеристики sensitivity и specificity для не переобученных моделей.
+
+```{r}
+test1 = test %>% mutate(Prediction = predtest_log$.pred_class)
+metrics1 = test1 %>% conf_mat(truth = Attrition, estimate = Prediction) %>% summary()
+metrics_log = metrics1 %>% filter(.metric == 'sens' | .metric == 'spec') %>% select(-.estimator)
+
+test2 = test %>% mutate(Prediction = predtest_tree$.pred_class)
+metrics2 = test2 %>% conf_mat(truth = Attrition, estimate = Prediction) %>% summary()
+metrics_tree = metrics2 %>% filter(.metric == 'sens' | .metric == 'spec') %>% select(-.estimator)
+
+metrics = c('sensitivity', 'specificity')
+dddd = data.frame('Metric' = metrics, 'Logistic_Regression' = metrics_log$.estimate, 'Decision_Tree' = metrics_tree$.estimate)
+
+knitr::kable(dddd)
+```
+
+Что ж, эти показатели не подходят для построения релевантных прогнозов. Возможно, такие значения получились в силу несбалансированности выборки. Построим модели Logistic Regression и Decision Tree на сбалансируемой методом UP-SAMPLING выборке.
+
+```{r}
+### ПРОВЕРКА СБАЛАНСИРОВАННОСТИ ВЫБОРКИ
+
+t = table(train$Attrition)
+
+table = table(train$Attrition)[1]/table(train$Attrition)[2]
+
+# 0 встречается в 8.6 раз чаще, чем 1
+#для построения лучшей модели, воспользуемся методом UP-SAMPLING для балансировки выборки
+
+
+ds_up = recipe( ~ ., data = train) %>%
+  step_upsample(Attrition) %>% 
+  prep(training = train, retain = TRUE) %>% 
+  bake(new_data = NULL)
+
+row = nrow(ds_up)
+#в изначальной выборке 423 наблюдения, в полученной - 758
+
+wf_log.up = workflow() %>% add_model(log) %>% add_formula(Attrition ~ .) %>% fit(ds_up)
+wf_tree.up = workflow() %>% add_model(tree) %>% add_formula(Attrition ~ .) %>% fit(ds_up)
+
+new_predtest_log = wf_log.up %>% predict(test)
+new_predtest_tree = wf_tree.up %>% predict(test)
+ 
+metrics3 = test %>% cbind(new_predtest_log) %>% conf_mat(Attrition, .pred_class) %>% summary()
+metrics_log3 = metrics3 %>% filter(.metric == 'sens' | .metric == 'spec' | .metric == 'accuracy') %>% select(-.estimator)
+
+metrics4 = test %>% cbind(new_predtest_tree) %>% conf_mat(Attrition, .pred_class) %>% summary()
+metrics_log4 = metrics4 %>% filter(.metric == 'sens' | .metric == 'spec' | .metric == 'accuracy') %>% select(-.estimator)
+
+metrics = c('accuracy', 'sensitivity', 'specificity')
+ddddd = data.frame('Metric' = metrics, 'Logistic_Regression' = metrics_log3$.estimate, 'Decision_Tree' = metrics_log4$.estimate)
+
+knitr::kable(ddddd)
+```
+
+Точность моделей заметно снизилась - из-за добавления наблюдений в выборку. Что касается sensitivity и specificity, модель Decision Tree подошла бы для анализа, если уход сотрудника ассоциирован с высокими потерями, тогда выгоднее в большем числе случаев предсказывать увольнение - это выражается в поговорке "лучше перебдеть, чем недобдеть". Однако, если модель слишком часто будет предсказывать увольнения, возможно, она чрезмерное внимание уделит неважным в действительности  факторам. Таким образом, работодатель, пытаясь исправить эти факторы, просто потеряет деньги. Поэтому все-таки было принято решение остановиться на модели Logistic Regression. 
+
+Рассмотрим ее подробнее. Определим, какие переменные она считает наиболее значимыми в определении статуса увольнения сотрудника.
+
+```{r}
+wf_log.up %>% extract_fit_parsnip() %>% vip(aesthetics = list(fill = "#8593AE")) + theme_minimal()
+```
+
+Большое расстояние до работы а также низкая удовлетворенность окружением оказались наиболее важными для предсказания моделью переменной Attrition.
+
+Получается, для того, чтобы снизить число увольняющихся, необходимо: во-первых, улучшить рабочее окружение, а во-вторых, арендовать жилье для работников рядом с офисом.
+
+Смоделируем ситуацию улучшения окружения, поскольку скорее всего расходы работодателя от данного действия будут меньше, чем от аренды жилья. Узнаем, насколько сильно уменьшится процент увольняющихся - т.е. какую потенциальную прибыль может сохранить нововведение.
+
+Предположим, нововведение подействовало так, что все работники, дающие окружению низкую оценку, поменяли свое мнение. Так что в выборке теперь все оценки принимают значение "Very High".
+
+```{r}
+test_simulation = test
+
+EnvironmentSatisfaction = case_when(test_simulation$EnvironmentSatisfaction == 'Low' ~ 'Very High',
+                                    test_simulation$EnvironmentSatisfaction == 'Medium' ~ 'Very High',
+                                    test_simulation$EnvironmentSatisfaction == 'High' ~ 'Very High',
+                                    test_simulation$EnvironmentSatisfaction == 'Very High' ~ 'Very High')
+
+
+test_simulation$EnvironmentSatisfaction = EnvironmentSatisfaction
+
+
+predTest = predict(wf_log.up, test_simulation)$.pred_class
+
+test4488 = test %>% rename(predTest = Attrition)
+ggplot(NULL, aes(x = predTest)) + 
+geom_bar(data = data.frame(predTest), aes(fill = "после нововведения"), alpha = 1, col = 'white') +
+geom_bar(data = test4488, aes(fill = 'до нововведения'), alpha = 0, col = 'black') +
+scale_fill_manual(values = c("white", "#7E675E")) +
+guides(fill = guide_legend(title = "")) + 
+scale_x_discrete(labels = c('не увольняются', 'увольняются')) + theme_minimal() + xlab('') + ylab('')
+```
+
+Что ж, этого оказалось недостаточно. Даже наоборот - ситуация с увольнениями немного ухудшилась. Поэтому предположим также, что всем сотрудникам, расстояние до работы у которых более 7 км, предоставили жилье, располагающееся в 7 км от офиса.
+
+```{r}
+test_simulation = test
+test_simulation$DistanceFromHome = as.numeric(test_simulation$DistanceFromHome)
+test_simulation$DistanceFromHome = ifelse(test_simulation$DistanceFromHome>=5, 5, test_simulation$DistanceFromHome)
+
+test_simulation$DistanceFromHome = as.integer(test_simulation$DistanceFromHome)
+EnvironmentSatisfaction = case_when(test_simulation$EnvironmentSatisfaction == 'Low' ~ 'Very High',
+                                    test_simulation$EnvironmentSatisfaction == 'Medium' ~ 'Very High',
+                                    test_simulation$EnvironmentSatisfaction == 'High' ~ 'Very High',
+                                    test_simulation$EnvironmentSatisfaction == 'Very High' ~ 'Very High')
+
+test_simulation$EnvironmentSatisfaction = EnvironmentSatisfaction
+
+predTest = predict(wf_log.up, test_simulation)$.pred_class
+
+ggplot(NULL, aes(x = predTest)) + 
+geom_bar(data = data.frame(predTest), aes(fill = "после нововведений"), alpha = 1, col = 'white') +
+geom_bar(data = test4488, aes(fill = 'до нововведений'), alpha = 0, col = 'black') +
+scale_fill_manual(values = c("white", "#7E675E")) +
+guides(fill = guide_legend(title = "")) + 
+scale_x_discrete(labels = c('не увольняются', 'увольняются')) + theme_minimal() + xlab('') + ylab('')
+```
+
+Как видно из графика, количество увольняющихся работников действительно значительно снизилось.
+
+\
+
+Таким образом, для уменьшения оттока наиболее результативных сотрудников фирме необходимо улучшить окружение, в котором он работают, а также организовать трансфер работников из наиболее отдаленных мест ближе к офису.
+
+```{r echo = F, message = F, warning = F}
+dbDisconnect(con)
+```
+
